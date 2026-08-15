@@ -11,7 +11,7 @@
 </head>
 <body>
 
-<button id="mode-toggle-btn" class="text-btn mode-toggle-btn">하드모드</button>
+<button id="mode-toggle-btn" class="text-btn mode-toggle-btn">Hard Mode</button>
 
 <div id="cam-start" class="cam-overlay hidden">
   <div class="cam-overlay-inner">
@@ -680,7 +680,7 @@
 
   function enterHardMode(){
     hardMode = true;
-    modeToggleBtn.textContent = '베이직모드';
+    modeToggleBtn.textContent = 'Basic Mode';
     devUiBtn.classList.remove('hidden');
     camStatus.textContent = '';
     camStartBtn.disabled = false;
