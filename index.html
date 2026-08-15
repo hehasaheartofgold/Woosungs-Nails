@@ -7,8 +7,24 @@
 <link rel="stylesheet" as="style" crossorigin href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" />
 <link rel="stylesheet" href="style.css">
 <script src="matter.min.js"></script>
+<script src="https://unpkg.com/ml5@1/dist/ml5.min.js"></script>
 </head>
 <body>
+
+<button id="mode-toggle-btn" class="text-btn mode-toggle-btn">하드모드</button>
+
+<div id="cam-start" class="cam-overlay hidden">
+  <div class="cam-overlay-inner">
+    <div class="cam-title">하드모드 — 입으로 깎기</div>
+    <div class="cam-desc">입을 벌리면 준비, 다물면 컷!</div>
+    <button id="cam-start-btn" class="text-btn">카메라 켜고 시작</button>
+    <div id="cam-status" class="cam-status"></div>
+  </div>
+</div>
+<video id="cam-video" playsinline muted style="display:none;"></video>
+<canvas id="cam-mesh-canvas" class="cam-preview hidden" width="320" height="240"></canvas>
+<div id="mouth-debug" class="mouth-debug hidden"></div>
+<button id="dev-ui-btn" class="text-btn dev-ui-btn hidden">dev ui: off</button>
 
 <div class="hud">
   <div class="lives" id="lives"></div>
@@ -66,12 +82,16 @@
   };
   let activeSide = 'A';
 
-  const POS_CENTER = '-75.6%';
-  const POS_EXIT = 'calc(-75.6% - 115vw)';
-  const POS_ENTER = 'calc(-75.6% + 115vw)';
+  // 가로 위치는 항상 고정 — finger-container가 420% 폭이라, 이 값만큼 당겨야 손톱이
+  // 트랙 안에 보임(이미지 상 손톱이 가로 73~76% 지점에 있는 것과 대응). 라운드 전환은
+  // 세로(Y)축으로 하되, 나가는 손/들어오는 손 둘 다 화면 "아래"를 씀 — 잘린 손이
+  // 아래로 사라지고, 새 손이 그 아래에서 다시 올라오는 구조.
+  const POS_X = '-75.6%';
+  const POS_CENTER_Y = '0px';
+  const POS_BELOW_Y = '115vh';
 
-  function setPos(side, xPos, bobPx){
-    fingerEls[side].style.transform = `translate(${xPos}, ${bobPx}px)`;
+  function setPos(side, yPos, bobPx){
+    fingerEls[side].style.transform = `translate(${POS_X}, calc(${yPos} + ${bobPx}px))`;
   }
 
   const CROP_X = 0, CROP_Y = 0, CROP_W = 2459.07, CROP_H = 3894;
@@ -87,7 +107,7 @@
   // 판정 등급을 이 구간(TOP~BOTTOM) 안에서 0~1 비율로 나눔 — 숫자 하나로 직관적으로
   // 조절됨. TOO_LONG_RATIO를 올리면 "너무 김" 구간이 넓어지고, 내리면 좁아짐.
   // TOO_LONG_RATIO ~ PERFECT_RATIO 사이는 전부 GOOD.
-  const TOO_LONG_RATIO = 0.70;
+  const TOO_LONG_RATIO = 0.60;
   const PERFECT_RATIO = 0.92;
 
   // 트랙 좌표(px)를 커트라인이랑 완전히 같은 기준으로 SVG y좌표로 직접 변환.
@@ -136,7 +156,7 @@
 
   // 잘려나가는 조각 — Matter.js로 실제 낙하/충돌하며 쌓이는 버전.
   const { Engine, World, Bodies, Body, Sleeping } = Matter;
-  const MAX_PIECES = 50; // 오래 플레이해도 바디 수가 무한정 안 늘어나게 캡
+  const MAX_PIECES = 20; // 오래 플레이해도 바디 수가 무한정 안 늘어나게 캡
   const DEBUG_COLLISION = false; // 개발용: 실제 충돌 박스를 빨간 테두리로 표시. 켜려면 true로.
   const COLLISION_SHRINK = 1; // 충돌 박스를 그림 크기 대비 0.3% 축소
 
@@ -289,8 +309,9 @@
       density: 0.002,
     });
     Body.setAngle(body, (Math.random() - 0.5) * 0.6);
-    Body.setVelocity(body, { x: (Math.random() - 0.5) * 6, y: 2 + Math.random() * 2 });
-    Body.setAngularVelocity(body, (Math.random() - 0.5) * 0.3);
+    // 자른 순간 충격을 받은 것처럼 조각이 위로 통! 튀어오른 뒤 중력에 끌려 떨어지도록 함
+    Body.setVelocity(body, { x: (Math.random() - 0.5) * 8, y: -(6 + Math.random() * 4) });
+    Body.setAngularVelocity(body, (Math.random() - 0.5) * 0.5);
     World.add(world, body);
 
     activePieces.push({ el: piece, debugEl, body, w: dispW, h: dispH, bw: trapW, bh: trapH, originFrac });
@@ -302,8 +323,8 @@
     }
   }
 
-  setPos('A', POS_CENTER, 0);
-  setPos('B', POS_ENTER, 0);
+  setPos('A', POS_CENTER_Y, 0);
+  setPos('B', POS_BELOW_Y, 0);
   const scoreEl = document.getElementById('score');
   const livesEl = document.getElementById('lives');
   const gameoverEl = document.getElementById('gameover');
@@ -342,13 +363,13 @@
 
     drawNail(ctxs[inSide], NAIL_TOP_SVG);
     fingerEls[inSide].classList.remove('slide-out', 'slide-in');
-    setPos(inSide, POS_ENTER, 0);
+    setPos(inSide, POS_BELOW_Y, 0);
     void fingerEls[inSide].offsetWidth;
 
     fingerEls[outSide].classList.add('slide-out');
     fingerEls[inSide].classList.add('slide-in');
-    setPos(outSide, POS_EXIT, 0);
-    setPos(inSide, POS_CENTER, 0);
+    setPos(outSide, POS_BELOW_Y, 0);
+    setPos(inSide, POS_CENTER_Y, 0);
 
     setTimeout(()=>{
       fingerEls[outSide].classList.remove('slide-out');
@@ -389,6 +410,8 @@
   }
 
   function onCut(){
+    // 하드모드 진입 화면(카메라 켜기 안내)이 떠있는 동안은 클릭/스페이스가 버블링돼도 무시.
+    if(!camOverlay.classList.contains('hidden')) return;
     if(gameOver){
       resetGame();
       return;
@@ -409,9 +432,11 @@
       fingerEls[activeSide].classList.add('hit');
       setTimeout(()=>fingerEls[activeSide].classList.remove('hit'), 250);
       shakePile();
+      document.body.classList.add('flash');
+      setTimeout(()=>document.body.classList.remove('flash'), 300);
     } else {
       const ratio = (localY - TOP) / (BOTTOM - TOP);
-      if(ratio < TOO_LONG_RATIO){ result = 'TOO LONG'; color = 'black'; points = -30; }
+      if(ratio < TOO_LONG_RATIO){ result = 'TOO LONG'; color = 'black'; points = 0; }
       else if(ratio > PERFECT_RATIO){ result = 'PERFECT'; color = 'black'; points = 50; isPerfect = true; }
       else { result = 'GOOD'; color = 'black'; points = 30; }
     }
@@ -442,9 +467,15 @@
     }
 
     round++;
-    cutSpeed = Math.min(240, cutSpeed + 6);
+    cutSpeed = Math.min(340, cutSpeed + 18);
 
-    setTimeout(startSwap, 700);
+    if(hardMode){
+      // 하드모드: 곧바로 다음 라운드로 넘어가지 않고, 최소 지연 후 "입을 다시 벌릴 때까지" 대기.
+      // processMouth()가 매 프레임 readyForSwap && stableMouthOpen을 확인해서 실제로 startSwap() 호출.
+      setTimeout(()=>{ readyForSwap = true; }, 700);
+    } else {
+      setTimeout(startSwap, 700);
+    }
   }
 
   function tick(t){
@@ -452,6 +483,8 @@
     const dtMs = Math.min(t - lastTime, 1000 / 30); // 탭 백그라운드 복귀 등 큰 점프 방지
     const dt = dtMs / 1000;
     lastTime = t;
+
+    processMouth();
 
     Engine.update(engine, dtMs);
     for(const p of activePieces){
@@ -472,7 +505,7 @@
 
       bobPhase += bobFreq * dt * Math.PI * 2;
       const bob = currentBob();
-      setPos(activeSide, POS_CENTER, bob);
+      setPos(activeSide, POS_CENTER_Y, bob);
     }
 
     requestAnimationFrame(tick);
@@ -484,6 +517,200 @@
   });
 
   buildLives();
+
+  // ===== 모드 전환 — 기본값은 버튼(클릭/스페이스)모드. 우상단 버튼으로 하드모드 토글. =====
+  let hardMode = false;
+  const modeToggleBtn = document.getElementById('mode-toggle-btn');
+
+  // ===== 하드모드: ml5 FaceMesh로 입 벌림/다뭄 감지 =====
+  // "입을 벌리면 ready, 닫으면 cut"을 기존 click/space onCut()에 그대로 얹음 — 판정
+  // 로직은 안 건드리고 트리거만 하나 더 추가. click/space는 테스트용으로 계속 살려둠.
+  const MOUTH_OPEN_THRESHOLD = 0.4; // (입 벌린 세로거리)/(입 가로폭) 비율 — 카메라/거리별 재조정 필요, mouth-debug 보면서 조절
+  const MOUTH_DEBOUNCE_FRAMES = 4;  // 랜드마크 노이즈로 인한 깜빡임 방지
+
+  const camVideo = document.getElementById('cam-video');
+  const camOverlay = document.getElementById('cam-start');
+  const camStartBtn = document.getElementById('cam-start-btn');
+  const camStatus = document.getElementById('cam-status');
+  const mouthDebugEl = document.getElementById('mouth-debug');
+  const camMeshCanvas = document.getElementById('cam-mesh-canvas');
+  const meshCtx = camMeshCanvas.getContext('2d');
+  const devUiBtn = document.getElementById('dev-ui-btn');
+
+  let faceMesh = null;
+  let faceMeshReady = false;
+  let cameraStream = null;
+  let faces = [];
+
+  let stableMouthOpen = false;
+  let mouthCandidate = false;
+  let mouthStreak = 0;
+  let readyForSwap = false; // 컷 끝나고 다음 라운드로 넘어갈 준비(입 다시 벌리길) 대기 중인지
+  let devUiOn = false;
+
+  // 입 아귀(61/291)와 입술 안쪽 위/아래(13/14) — MediaPipe FaceMesh 표준 인덱스.
+  // 입 폭으로 나눠서 정규화 → 카메라와의 거리가 달라져도 비율은 비교적 일정하게 유지됨.
+  function getMouthOpenRatio(face){
+    const kp = face.keypoints;
+    const top = kp[13], bottom = kp[14], left = kp[61], right = kp[291];
+    if(!top || !bottom || !left || !right) return 0;
+    const openDist = Math.hypot(bottom.x - top.x, bottom.y - top.y);
+    const mouthWidth = Math.hypot(right.x - left.x, right.y - left.y);
+    return mouthWidth > 0 ? openDist / mouthWidth : 0;
+  }
+
+  // 실제 카메라 영상은 화면에 안 그리고, ml5가 잡은 랜드마크 점만 캔버스에 그림
+  // (video 엘리먼트는 detectStart용 소스로만 쓰이고 항상 display:none).
+  function drawMeshPreview(face){
+    meshCtx.fillStyle = '#111';
+    meshCtx.fillRect(0, 0, camMeshCanvas.width, camMeshCanvas.height);
+    if(!face) return;
+    meshCtx.fillStyle = '#4dff4d';
+    for(const p of face.keypoints){
+      meshCtx.fillRect(p.x - 1, p.y - 1, 2, 2);
+    }
+    meshCtx.fillStyle = '#ff3b3b';
+    [13, 14, 61, 291].forEach(i => {
+      const p = face.keypoints[i];
+      if(!p) return;
+      meshCtx.beginPath();
+      meshCtx.arc(p.x, p.y, 2.5, 0, Math.PI * 2);
+      meshCtx.fill();
+    });
+  }
+
+  function processMouth(){
+    if(!hardMode || !faceMesh) return; // 베이직모드/카메라 준비 전에는 tick()이 매 프레임 불러도 아무것도 안 함
+
+    const face = faces && faces[0];
+    const ratio = face ? getMouthOpenRatio(face) : 0;
+    const rawMouthOpen = ratio > MOUTH_OPEN_THRESHOLD;
+
+    if(rawMouthOpen === mouthCandidate){
+      mouthStreak++;
+    } else {
+      mouthCandidate = rawMouthOpen;
+      mouthStreak = 1;
+    }
+    const prevStable = stableMouthOpen;
+    if(mouthStreak >= MOUTH_DEBOUNCE_FRAMES){
+      stableMouthOpen = mouthCandidate;
+    }
+
+    if(devUiOn){
+      mouthDebugEl.textContent = `mouth: ${ratio.toFixed(2)} (th ${MOUTH_OPEN_THRESHOLD}) — ${stableMouthOpen ? 'OPEN (ready)' : 'CLOSED'}${face ? '' : ' — no face'}`;
+      drawMeshPreview(face);
+    }
+
+    // 벌림 → 다뭄으로 바뀌는 순간 = cut 액션 (스페이스/클릭이랑 동일한 onCut 호출)
+    if(prevStable && !stableMouthOpen && !locked && !gameOver){
+      onCut();
+    }
+
+    // "입을 벌리고 있어야 다음 손가락으로 넘어감" — 컷 후 최소 지연이 지나고, 입이 다시
+    // 열린 상태를 확인해야만 실제로 다음 라운드로 스왑함.
+    if(readyForSwap && stableMouthOpen){
+      readyForSwap = false;
+      startSwap();
+    }
+  }
+
+  function updateDevUiVisibility(){
+    const show = hardMode && devUiOn;
+    camMeshCanvas.classList.toggle('hidden', !show);
+    mouthDebugEl.classList.toggle('hidden', !show);
+  }
+
+  devUiBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    devUiOn = !devUiOn;
+    devUiBtn.textContent = devUiOn ? 'dev ui: on' : 'dev ui: off';
+    updateDevUiVisibility();
+  });
+
+  function tryStart(){
+    if(!faceMeshReady || !cameraStream) return;
+    faceMesh.detectStart(camVideo, (results) => { faces = results; });
+    camOverlay.classList.add('hidden');
+  }
+
+  // 모델 로딩(특히 mediapipe 런타임의 WASM/모델 파일 다운로드)이 카메라 권한 요청 이후에야
+  // 시작되면 두 대기시간이 순차로 더해져서 체감이 매우 느려짐 — 그래서 모델은 카메라 권한과
+  // 무관하게 페이지 로드 즉시 백그라운드로 미리 받기 시작함(하드모드로 아직 전환 안 했어도).
+  //
+  // ml5.faceMesh(options, callback)의 반환값은 그냥 Promise고, detectStart 등이 실제로
+  // 있는 모델 인스턴스는 콜백의 "인자"로 들어옴 — 반환값을 저장해서 쓰면
+  // "detectStart is not a function"이 남(직접 콘솔로 확인함).
+  ml5.faceMesh({ maxFaces: 1, refineLandmarks: true, runtime: 'mediapipe' }, (model) => {
+    faceMesh = model;
+    faceMeshReady = true;
+    tryStart();
+  });
+
+  function initCameraAndModel(){
+    camStartBtn.disabled = true;
+    camStatus.textContent = faceMeshReady ? '카메라 권한 요청 중...' : '카메라 권한 요청 중... (얼굴 인식 모델도 백그라운드에서 준비 중)';
+    navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'user', width: { ideal: 320 }, height: { ideal: 240 } },
+      audio: false,
+    }).then(stream => {
+      camVideo.srcObject = stream;
+      camVideo.play();
+      cameraStream = stream;
+      if(!faceMeshReady) camStatus.textContent = '얼굴 인식 모델 로딩 중...';
+      tryStart();
+    }).catch(err => {
+      camStartBtn.disabled = false;
+      camStatus.textContent = '카메라 접근 실패 — ' + err.message + ' (https 또는 localhost에서만 동작함)';
+    });
+  }
+
+  function stopCamera(){
+    if(faceMesh) faceMesh.detectStop();
+    if(cameraStream){
+      cameraStream.getTracks().forEach(t => t.stop());
+      cameraStream = null;
+    }
+    faces = [];
+    stableMouthOpen = false;
+    mouthCandidate = false;
+    mouthStreak = 0;
+    readyForSwap = false;
+  }
+
+  function enterHardMode(){
+    hardMode = true;
+    modeToggleBtn.textContent = '베이직모드';
+    devUiBtn.classList.remove('hidden');
+    camStatus.textContent = '';
+    camStartBtn.disabled = false;
+    camOverlay.classList.remove('hidden');
+  }
+
+  function enterBasicMode(){
+    hardMode = false;
+    modeToggleBtn.textContent = '하드모드';
+    camOverlay.classList.add('hidden');
+    devUiBtn.classList.add('hidden');
+    devUiOn = false;
+    devUiBtn.textContent = 'dev ui: off';
+    updateDevUiVisibility();
+    stopCamera();
+  }
+
+  modeToggleBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if(hardMode) enterBasicMode(); else enterHardMode();
+  });
+
+  // stopPropagation 필수 — 안 하면 이 클릭이 document의 전역 onCut 리스너까지 버블링돼서
+  // "시작" 버튼 누르는 순간 몰래 컷 1회가 실행됨(그 결과가 700ms 뒤 readyForSwap=true로
+  // 남아있다가, 플레이어가 처음 입을 벌리는 순간 조기 스왑되어 손가락이 겹쳐 보이는 원인이었음).
+  camStartBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    initCameraAndModel();
+  });
+
   resetGame();
   requestAnimationFrame(tick);
 })();
